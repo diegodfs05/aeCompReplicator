@@ -41,10 +41,10 @@
       - Each text layer is updated if the layer name matches a key in the JSON object.
 
    Estrutura de pacote:
-   aeCompReplicator/ 
-      ├── myCompReplicator.jsx 
-      ├── exampleData.json 
-      └── README.md
+   aeCompReplicator/<br>
+      ├── myCompReplicator.jsx <br>
+      ├── exampleData.json <br>
+      └── README.md<br>
 
    ## Notes
 
