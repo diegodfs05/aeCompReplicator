@@ -1,0 +1,17 @@
+[
+    {
+        "title": "First Title",
+        "subtitle": "The first subtitle",
+        "author": "Alice"
+    },
+    {
+        "title": "Second Title",
+        "subtitle": "Another subtitle here",
+        "author": "Bob"
+    },
+    {
+        "title": "Third Title",
+        "subtitle": "Yet another subtitle",
+        "author": "Charlie"
+    }
+]
