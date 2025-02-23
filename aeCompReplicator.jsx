@@ -1,30 +1,37 @@
 /**
- * myCompReplicator.jsx
+ * meuReplicadorDeComp.jsx
  *
- * Updated script UI panel that:
- *  1) Lets user pick a composition (template).
- *  2) Has a "Reload Comps" button to refresh the list of compositions.
- *  3) Lets user specify how many text layers to process (fieldsCountInput).
- *  4) Dynamically shows that many drop-downs for selecting which text layers in the template comp should be updated.
- *  5) Reads a JSON array, ignoring property names: the 1st property value goes to the 1st selected layer, 2nd to 2nd, etc.
- *  6) Duplicates the comp for each JSON object, updating those text layers with the enumerated property values.
+ * This version has all UI text and alerts in Portuguese.
  *
- * Also includes:
- *   - Minimal JSON.parse polyfill using eval() for older AE versions.
- *   - Minimal Array.isArray polyfill.
+ * HOW IT WORKS (English summary):
+ *  1) One label row for each prompt (e.g. "Selecione a Composição").
+ *  2) Another row for the actual controls (e.g. dropdowns, buttons).
+ *  3) Data file format can be JSON or CSV (semicolon-separated).
+ *  4) "Número de camadas de texto" determines how many dropdowns to create
+ *     for selecting which text layers to update.
+ *  5) Replicates the composition for each row in the data file, updating the chosen text layers.
  */
 
 /*******************************************************
+ * 0) String.trim polyfill for older ExtendScript
+ *******************************************************/
+if (typeof String.prototype.trim !== 'function') {
+    String.prototype.trim = function() {
+        return this.replace(/^\s+|\s+$/g, '');
+    };
+}
+
+/*******************************************************
  * 1) Minimal JSON polyfill
- *    Uses eval(...) internally. Use caution with untrusted data.
  *******************************************************/
 if (typeof JSON === 'undefined') {
     JSON = {
-        parse: function (str) {
+        parse: function(str) {
+            // Using eval(...) for old AE engines; caution if data is untrusted
             return eval('(' + str + ')');
         },
-        stringify: function () {
-            throw new Error('JSON.stringify not implemented in this minimal polyfill.');
+        stringify: function() {
+            throw new Error('JSON.stringify não está implementado neste polyfill.');
         }
     };
 }
@@ -33,118 +40,183 @@ if (typeof JSON === 'undefined') {
  * 2) Array.isArray polyfill
  *******************************************************/
 if (typeof Array.isArray === 'undefined') {
-    Array.isArray = function (arg) {
+    Array.isArray = function(arg) {
         return Object.prototype.toString.call(arg) === '[object Array]';
     };
 }
 
-(function (thisObj) {
+(function(thisObj) {
 
+    var mainPanel;
+
+    // UI references
     var compDropdown,
         reloadBtn,
+        formatDropdown,
+        jsonLabel,
+        browseBtn,
         fieldsCountInput,
         setFieldsBtn,
         fieldsGroup,
         layerSelectors = [],
-        jsonLabel,
-        browseBtn,
-        processBtn,
-        mainPanel;
+        processBtn;
 
     /**
      * buildUI()
-     * Creates the ScriptUI panel (docked or floating).
+     * Creates the dockable/floating panel with a layout where each
+     * label is on its own row, and the associated controls are on
+     * the next row.
      */
     function buildUI(thisObj) {
         // Create a dockable panel if in AE, otherwise a floating window
         var panel = (thisObj instanceof Panel)
             ? thisObj
-            : new Window('palette', 'Comp Replicator', undefined, { resizeable: true });
-
+            : new Window('palette', 'Replicador de Comps', undefined, {resizeable: true});
         mainPanel = panel;
 
-        // --- 1) Composition selector row ---
-        panel.add('statictext', undefined, 'Selecione uma composição');
+        // Panel orientation
+        panel.orientation = 'column';
+        panel.alignChildren = ['fill', 'top'];
 
-        // A row for the dropdown & reload button
+        //---------------------------------------------------
+        // 1) Selecione a Composição
+        //---------------------------------------------------
+        // 1A) Label row
+        panel.add('statictext', undefined, 'Selecione a Composição:');
+
+        // 1B) Controls row
         var compRow = panel.add('group');
         compRow.orientation = 'row';
+        compRow.alignChildren = ['fill', 'center'];
+        compRow.alignment = ['fill', 'top'];
+
         compDropdown = compRow.add('dropdownlist', undefined, []);
+        compDropdown.alignment = ['fill', 'center'];
 
         reloadBtn = compRow.add('button', undefined, 'Recarregar Composições');
 
-        // --- 2) Number of text layers to process ---
+        //---------------------------------------------------
+        // 2) Formato do Arquivo de Dados
+        //---------------------------------------------------
+        // 2A) Label row
+        panel.add('statictext', undefined, 'Selecione o Formato do Arquivo de Dados:');
+
+        // 2B) Controls row
+        var formatRow = panel.add('group');
+        formatRow.orientation = 'row';
+        formatRow.alignChildren = ['fill', 'center'];
+        formatRow.alignment = ['fill', 'top'];
+
+        formatDropdown = formatRow.add('dropdownlist', undefined, ['JSON', 'CSV']);
+        formatDropdown.selection = 0; // default JSON
+        formatDropdown.alignment = ['fill', 'center'];
+
+        //---------------------------------------------------
+        // 3) Selecionar Arquivo
+        //---------------------------------------------------
+        // 3A) Label row
+        panel.add('statictext', undefined, 'Selecione o Arquivo:');
+
+        // 3B) Controls row
+        var fileRow = panel.add('group');
+        fileRow.orientation = 'row';
+        fileRow.alignChildren = ['fill', 'center'];
+        fileRow.alignment = ['fill', 'top'];
+
+        jsonLabel = fileRow.add('statictext', undefined, 'Nenhum arquivo selecionado');
+        jsonLabel.alignment = ['fill', 'center'];
+        // Optionally give it a min width
+        jsonLabel.preferredSize.width = 200;
+
+        browseBtn = fileRow.add('button', undefined, 'Procurar Arquivo...');
+        browseBtn.alignment = ['right', 'center'];
+
+        //---------------------------------------------------
+        // 4) Número de Camadas de Texto
+        //---------------------------------------------------
+        // 4A) Label row
         panel.add('statictext', undefined, 'Número de camadas de texto a processar:');
-        fieldsCountInput = panel.add('edittext', undefined, '0');
+
+        // 4B) Controls row
+        var fieldsCountRow = panel.add('group');
+        fieldsCountRow.orientation = 'row';
+        fieldsCountRow.alignChildren = ['fill', 'center'];
+        fieldsCountRow.alignment = ['fill', 'top'];
+
+        fieldsCountInput = fieldsCountRow.add('edittext', undefined, '0');
         fieldsCountInput.characters = 4;
+        fieldsCountInput.alignment = ['left', 'center'];
 
-        setFieldsBtn = panel.add('button', undefined, 'Definir camadas de texto');
+        setFieldsBtn = fieldsCountRow.add('button', undefined, 'Definir Camadas');
+        setFieldsBtn.alignment = ['right', 'center'];
 
-        // --- 3) A group to hold the dynamic text-layer selectors ---
+        //---------------------------------------------------
+        // 5) Group for dynamic text-layer dropdowns
+        //---------------------------------------------------
         fieldsGroup = panel.add('group');
         fieldsGroup.orientation = 'column';
+        fieldsGroup.alignChildren = ['fill', 'top'];
+        fieldsGroup.alignment = ['fill', 'top'];
 
-        // --- 4) JSON file selection ---
-        var jsonGroup = panel.add('group');
-        jsonGroup.orientation = 'row';
-        jsonLabel = jsonGroup.add('statictext', undefined, 'Nenhum JSON selecionado');
-        browseBtn = jsonGroup.add('button', undefined, 'Selecionar JSON...');
+        //---------------------------------------------------
+        // 6) Botão de Replicação
+        //---------------------------------------------------
+        processBtn = panel.add('button', undefined, 'Replicar Composições');
+        processBtn.alignment = ['fill', 'top'];
 
-        // --- 5) Replicate button ---
-        processBtn = panel.add('button', undefined, 'Replicar');
-
-        // -- EVENT HANDLERS --
-
-        // (A) Reload Comps
-        reloadBtn.onClick = function () {
+        //-----------------------------------------------
+        // EVENT HANDLERS
+        //-----------------------------------------------
+        reloadBtn.onClick = function() {
             populateCompList();
         };
 
-        // (B) Set Fields (create text-layer dropdowns)
-        setFieldsBtn.onClick = function () {
+        browseBtn.onClick = function() {
+            var fileFormat = formatDropdown.selection ? formatDropdown.selection.text : 'JSON';
+            var ext = (fileFormat === 'CSV') ? '*.csv' : '*.json';
+            var dataFile = File.openDialog('Selecione o arquivo ' + fileFormat, ext);
+            if (dataFile && dataFile.exists) {
+                jsonLabel.text = decodeURI(dataFile.fsName);
+            }
+        };
+
+        setFieldsBtn.onClick = function() {
             clearLayerSelectors();
             var count = parseInt(fieldsCountInput.text, 10);
             if (isNaN(count) || count < 1) {
-                alert('Informe um número inteiro positivo válido.');
+                alert('Por favor, insira um número válido de camadas de texto a processar.');
                 return;
             }
             createFieldSelectors(count);
         };
 
-        // (C) Browse for JSON
-        browseBtn.onClick = function () {
-            var jsonFile = File.openDialog('Selecione um arquivo de dados JSON', '*.json');
-            if (jsonFile && jsonFile.exists) {
-                jsonLabel.text = decodeURI(jsonFile.fsName);
-            }
-        };
-
-        // (D) Replicate Comps
         processBtn.onClick = replicateComps;
 
-        // (E) Attempt to populate comps right now (in case a project is open)
+        // Attempt to populate comps initially
         populateCompList();
 
-        // Show the window if it's floating
+        // Show if floating
         if (panel instanceof Window) {
             panel.center();
             panel.show();
         }
+
         return panel;
     }
 
+
     /**
      * populateCompList()
-     * Clears the compDropdown and adds a list of all comps in the current project.
+     * Clears and refills compDropdown with all comps in the project.
      */
     function populateCompList() {
         if (!compDropdown) return;
         compDropdown.removeAll();
 
-        var project = app.project;
-        if (project && project.numItems > 0) {
-            for (var i = 1; i <= project.numItems; i++) {
-                var item = project.item(i);
+        var proj = app.project;
+        if (proj && proj.numItems > 0) {
+            for (var i = 1; i <= proj.numItems; i++) {
+                var item = proj.item(i);
                 if (item instanceof CompItem) {
                     compDropdown.add('item', item.name);
                 }
@@ -155,53 +227,57 @@ if (typeof Array.isArray === 'undefined') {
         }
     }
 
+
     /**
      * createFieldSelectors(count)
-     * Dynamically creates `count` dropdown selectors in fieldsGroup,
-     * each enumerating the text layers in the chosen composition.
+     * Dynamically creates `count` dropdown selectors, each for picking
+     * which text layer to update.
      */
     function createFieldSelectors(count) {
-        var selectedCompName = compDropdown.selection ? compDropdown.selection.text : null;
-        if (!selectedCompName) {
-            alert('Não foi selecionada uma composição.');
+        var selCompName = compDropdown.selection ? compDropdown.selection.text : null;
+        if (!selCompName) {
+            alert('Nenhuma composição selecionada.');
             return;
         }
-        var templateComp = findCompByName(selectedCompName);
+        var templateComp = findCompByName(selCompName);
         if (!templateComp) {
-            alert('A composição selecionada não foi encontrada.');
+            alert('A composição selecionada não foi encontrada no projeto.');
             return;
         }
 
-        // Collect text-layer names
-        var textLayers = [];
+        // Gather text-layer names
+        var textLayerNames = [];
         for (var i = 1; i <= templateComp.numLayers; i++) {
             var lyr = templateComp.layer(i);
             if (lyr.matchName === 'ADBE Text Layer') {
-                textLayers.push(lyr.name);
+                textLayerNames.push(lyr.name);
             }
         }
 
-        // Create the specified number of dropdowns
+        // Create 'count' rows, each with a single dropdown
         for (var k = 0; k < count; k++) {
             var row = fieldsGroup.add('group');
             row.orientation = 'row';
+            row.alignChildren = ['fill', 'center'];
+            row.alignment = ['fill', 'top'];
 
-            row.add('statictext', undefined, 'Camada ' + (k + 1) + ':');
-            var dd = row.add('dropdownlist', undefined, textLayers);
-            if (textLayers.length > 0) {
-                dd.selection = 0; // default
+            var dd = row.add('dropdownlist', undefined, textLayerNames);
+            dd.alignment = ['fill', 'center'];
+            if (textLayerNames.length > 0) {
+                dd.selection = 0;
             }
             layerSelectors.push(dd);
         }
 
-        // Force UI layout refresh
+        // Refresh layout
         fieldsGroup.layout.layout(true);
         mainPanel.layout.layout(true);
     }
 
+
     /**
      * clearLayerSelectors()
-     * Removes all child UI elements from fieldsGroup (the dynamic selectors).
+     * Removes all dynamic drop-downs from fieldsGroup.
      */
     function clearLayerSelectors() {
         while (fieldsGroup.children.length > 0) {
@@ -212,76 +288,71 @@ if (typeof Array.isArray === 'undefined') {
         mainPanel.layout.layout(true);
     }
 
+
     /**
      * replicateComps()
-     * 1) Reads JSON file as array of objects.
-     * 2) For each object, enumerates its values in order.
-     * 3) Duplicates the chosen comp, sets each selected layer's text to the corresponding property value.
+     * Reads the chosen data file, duplicates the template comp for each row,
+     * updates the chosen text layers in order, etc.
      */
     function replicateComps() {
-        app.beginUndoGroup('Replicate Comps');
+        app.beginUndoGroup('Replicar Composições');
         try {
-            var project = app.project;
-            if (!project) {
-                alert('Nenhum projeto foi carregado.');
+            var proj = app.project;
+            if (!proj) {
+                alert('Nenhum projeto aberto.');
                 return;
             }
 
-            // Check composition
             if (!compDropdown.selection) {
-                alert('Primeiro selecione uma composição.');
+                alert('Selecione uma composição primeiro.');
                 return;
             }
             var templateCompName = compDropdown.selection.text;
             var templateComp = findCompByName(templateCompName);
             if (!templateComp) {
-                alert('Composição modelo não encontrada.');
+                alert('A composição selecionada não foi encontrada no projeto.');
                 return;
             }
 
-            // Check JSON
-            var jsonPath = (jsonLabel && jsonLabel.text) ? jsonLabel.text : '';
-            var dataFile = new File(jsonPath);
+            // Determine file format
+            var fileFormat = formatDropdown.selection ? formatDropdown.selection.text : 'JSON';
+            var dataPath = jsonLabel.text;
+            if (!dataPath || dataPath === 'Nenhum arquivo selecionado') {
+                alert('Por favor, selecione um arquivo de dados (' + fileFormat + ').');
+                return;
+            }
+            var dataFile = new File(dataPath);
             if (!dataFile.exists) {
-                alert('Selecione um arquivo JSON válido.');
+                alert('O arquivo selecionado não existe.');
                 return;
             }
 
+            // Parse the file into array of arrays
             dataFile.open('r');
             var content = dataFile.read();
             dataFile.close();
-            var jsonData = JSON.parse(content);
-
-            if (!Array.isArray(jsonData)) {
-                alert('JSON deve ser uma lista de objetos de dados.');
+            var rows = parseDataFile(fileFormat, content);
+            if (!rows || !Array.isArray(rows) || rows.length === 0) {
+                alert('Nenhuma linha válida encontrada no arquivo ' + fileFormat + '.');
                 return;
             }
 
-            // Make sure we have at least one field to process
+            // If no fields configured, nothing to do
             if (layerSelectors.length === 0) {
-                alert('Você não selecionou nenhuma camada de texto. Clique em "Definir camadas de texto" após digitar o número de camadas.');
+                alert('Nenhuma camada de texto foi configurada. Clique em "Definir Camadas" após especificar um número.');
                 return;
             }
 
-            // For each object in the array...
-            for (var i = 0; i < jsonData.length; i++) {
-                var dataObj = jsonData[i];
-
-                // Convert object properties to an array of values
-                var objValues = [];
-                for (var key in dataObj) {
-                    if (dataObj.hasOwnProperty(key)) {
-                        objValues.push(dataObj[key]);
-                    }
-                }
-
-                // Duplicate the comp
+            // Duplicate the comp for each row
+            for (var i = 0; i < rows.length; i++) {
+                var rowData = rows[i];
                 var newComp = templateComp.duplicate();
                 newComp.name = templateComp.name + '_' + (i + 1);
 
-                // For each layerSelector, set the text from the corresponding objValues index
+                // For each selected text layer, map from rowData[s]
                 for (var s = 0; s < layerSelectors.length; s++) {
-                    if (s >= objValues.length) break;  // No more values left
+                    if (s >= rowData.length) break;
+
                     var selectedLayerName = layerSelectors[s].selection
                         ? layerSelectors[s].selection.text
                         : null;
@@ -293,23 +364,71 @@ if (typeof Array.isArray === 'undefined') {
                     var sourceTextProp = targetLayer.property('Source Text');
                     if (sourceTextProp) {
                         var textDoc = sourceTextProp.value;
-                        textDoc.text = objValues[s];
+                        textDoc.text = String(rowData[s]);
                         sourceTextProp.setValue(textDoc);
                     }
                 }
             }
 
-            alert('Foram replicadas com sucesso ' + jsonData.length + ' composições!');
+            alert('Foram replicadas com sucesso ' + rows.length + ' composições!');
         } catch (e) {
-            alert('Error: ' + e.toString());
+            alert('Erro: ' + e.toString());
         } finally {
             app.endUndoGroup();
         }
     }
 
+
+    /**
+     * parseDataFile(fileFormat, content)
+     * Reads 'content' as either JSON or CSV, returning an array of arrays (rows).
+     */
+    function parseDataFile(fileFormat, content) {
+        var rows = [];
+
+        if (fileFormat === 'CSV') {
+            // naive semicolon-based CSV
+            var lines = content.split('\n');
+            for (var i = 0; i < lines.length; i++) {
+                var line = lines[i].replace(/\r$/, '').trim();
+                if (line === '') { continue; }
+                var fields = line.split(';');
+                for (var f = 0; f < fields.length; f++) {
+                    var field = fields[f].trim().replace(/^"(.*)"$/, '$1');
+                    fields[f] = field;
+                }
+                rows.push(fields);
+            }
+        } else {
+            // JSON
+            var data = JSON.parse(content);
+            if (!Array.isArray(data)) {
+                alert('O arquivo JSON deve conter um array (de objetos ou arrays).');
+                return null;
+            }
+            if (Array.isArray(data[0])) {
+                rows = data;
+            } else {
+                // array of objects => array of arrays
+                for (var j = 0; j < data.length; j++) {
+                    var obj = data[j];
+                    var arr = [];
+                    for (var key in obj) {
+                        if (obj.hasOwnProperty(key)) {
+                            arr.push(obj[key]);
+                        }
+                    }
+                    rows.push(arr);
+                }
+            }
+        }
+        return rows;
+    }
+
+
     /**
      * findCompByName(name)
-     * Returns the first CompItem in the project with the given name.
+     * Helper to retrieve a CompItem by name in the project.
      */
     function findCompByName(name) {
         var proj = app.project;
@@ -322,6 +441,7 @@ if (typeof Array.isArray === 'undefined') {
         }
         return null;
     }
+
 
     /**
      * findLayerByName(comp, layerName)
@@ -336,6 +456,7 @@ if (typeof Array.isArray === 'undefined') {
         }
         return null;
     }
+
 
     // Build the UI
     var myScriptPal = buildUI(thisObj);
